@@ -1,78 +1,74 @@
 #!/usr/bin/env python3
 """
 Fuzzy Logic Controller for ROSbot Navigation
-Author: Adham Aboulkheir
-University of Essex
+Author: Adham Aboulkheir | University of Essex
 """
 import numpy as np
-import skfuzzy as fuzz
-from skfuzzy import control as ctrl
+
+
+class FuzzyMF:
+    """Triangular membership function."""
+    def __init__(self, a, b, c):
+        self.a, self.b, self.c = a, b, c
+
+    def compute(self, x):
+        x = np.atleast_1d(np.array(x, dtype=float))
+        left  = (x - self.a) / (self.b - self.a + 1e-9)
+        right = (self.c - x) / (self.c - self.b + 1e-9)
+        return np.clip(np.minimum(left, right), 0, 1)
 
 
 class FuzzyNavigationController:
     """
-    Type-1 Fuzzy Logic Controller for obstacle avoidance and navigation.
-    Uses ultrasonic and IR sensor inputs to generate smooth motor commands.
+    Type-1 Fuzzy Logic Controller for obstacle avoidance.
+    Inputs:  obstacle_distance (cm), robot_speed (0-1)
+    Output:  motor_command (-1=stop, +1=full speed)
     """
 
     def __init__(self):
-        self._build_fuzzy_system()
+        self.dist_near   = FuzzyMF(0,   0,   50)
+        self.dist_medium = FuzzyMF(30,  80,  130)
+        self.dist_far    = FuzzyMF(100, 200, 200)
+        self.speed_low   = FuzzyMF(0,   0,   0.5)
+        self.speed_high  = FuzzyMF(0.3, 1.0, 1.0)
+        self.cmd_stop     = FuzzyMF(-1.0, -1.0, -0.2)
+        self.cmd_slow     = FuzzyMF(-0.3,  0.2,  0.5)
+        self.cmd_moderate = FuzzyMF( 0.3,  0.6,  0.8)
+        self.cmd_fast     = FuzzyMF( 0.6,  1.0,  1.0)
 
-    def _build_fuzzy_system(self):
-        """Define fuzzy variables, membership functions, and rules."""
-        # Input variables
-        self.obstacle_dist = ctrl.Antecedent(np.arange(0, 201, 1), 'obstacle_distance')
-        self.robot_speed   = ctrl.Antecedent(np.arange(0, 1.01, 0.01), 'robot_speed')
-
-        # Output variable
-        self.motor_cmd = ctrl.Consequent(np.arange(-1, 1.01, 0.01), 'motor_command')
-
-        # Membership functions — obstacle distance (cm)
-        self.obstacle_dist['near']   = fuzz.trimf(self.obstacle_dist.universe, [0, 0, 50])
-        self.obstacle_dist['medium'] = fuzz.trimf(self.obstacle_dist.universe, [30, 80, 130])
-        self.obstacle_dist['far']    = fuzz.trimf(self.obstacle_dist.universe, [100, 200, 200])
-
-        # Membership functions — robot speed (m/s normalised 0-1)
-        self.robot_speed['low']  = fuzz.trimf(self.robot_speed.universe, [0, 0, 0.5])
-        self.robot_speed['high'] = fuzz.trimf(self.robot_speed.universe, [0.3, 1, 1])
-
-        # Membership functions — motor command (-1 = stop/reverse, 1 = full forward)
-        self.motor_cmd['stop']     = fuzz.trimf(self.motor_cmd.universe, [-1, -1, -0.2])
-        self.motor_cmd['slow']     = fuzz.trimf(self.motor_cmd.universe, [-0.3, 0.2, 0.5])
-        self.motor_cmd['moderate'] = fuzz.trimf(self.motor_cmd.universe, [0.3, 0.6, 0.8])
-        self.motor_cmd['fast']     = fuzz.trimf(self.motor_cmd.universe, [0.6, 1, 1])
-
-        # Fuzzy rules
-        rules = [
-            ctrl.Rule(self.obstacle_dist['near']   & self.robot_speed['high'], self.motor_cmd['stop']),
-            ctrl.Rule(self.obstacle_dist['near']   & self.robot_speed['low'],  self.motor_cmd['slow']),
-            ctrl.Rule(self.obstacle_dist['medium'] & self.robot_speed['high'], self.motor_cmd['slow']),
-            ctrl.Rule(self.obstacle_dist['medium'] & self.robot_speed['low'],  self.motor_cmd['moderate']),
-            ctrl.Rule(self.obstacle_dist['far'],                               self.motor_cmd['fast']),
-        ]
-
-        self.control_system = ctrl.ControlSystem(rules)
-        self.simulation     = ctrl.ControlSystemSimulation(self.control_system)
-
-    def compute(self, obstacle_distance_cm: float, current_speed: float) -> float:
-        """
-        Compute motor command from sensor inputs.
-
-        Args:
-            obstacle_distance_cm: Distance to nearest obstacle in cm
-            current_speed: Current robot speed (normalised 0-1)
-
-        Returns:
-            Motor command in range [-1, 1]
-        """
-        self.simulation.input['obstacle_distance'] = np.clip(obstacle_distance_cm, 0, 200)
-        self.simulation.input['robot_speed']       = np.clip(current_speed, 0, 1)
-        self.simulation.compute()
-        return float(self.simulation.output['motor_command'])
+    def compute(self, distance_cm: float, speed: float) -> float:
+        """Compute motor command using Mamdani fuzzy inference."""
+        d = np.clip(distance_cm, 0, 200)
+        s = np.clip(speed, 0, 1)
+        near   = float(self.dist_near.compute(d))
+        medium = float(self.dist_medium.compute(d))
+        far    = float(self.dist_far.compute(d))
+        low    = float(self.speed_low.compute(s))
+        high   = float(self.speed_high.compute(s))
+        r_stop     = min(near, high)
+        r_slow_1   = min(near, low)
+        r_slow_2   = min(medium, high)
+        r_moderate = min(medium, low)
+        r_fast     = far
+        x_out = np.linspace(-1, 1, 200)
+        agg = np.zeros(200)
+        agg = np.maximum(agg, r_stop     * self.cmd_stop.compute(x_out))
+        agg = np.maximum(agg, max(r_slow_1, r_slow_2) * self.cmd_slow.compute(x_out))
+        agg = np.maximum(agg, r_moderate * self.cmd_moderate.compute(x_out))
+        agg = np.maximum(agg, r_fast     * self.cmd_fast.compute(x_out))
+        denom = np.sum(agg)
+        if denom < 1e-9:
+            return 0.0
+        return float(np.sum(x_out * agg) / denom)
 
 
-if __name__ == '__main__':
-    controller = FuzzyNavigationController()
-    # Example: obstacle 30cm away, moving at 80% speed
-    cmd = controller.compute(obstacle_distance_cm=30, current_speed=0.8)
-    print(f"Motor command: {cmd:.3f}")  # Expected: near stop
+if __name__ == "__main__":
+    print("Fuzzy ROSbot Controller Demo")
+    ctrl = FuzzyNavigationController()
+    test_cases = [(20, 0.9), (80, 0.5), (150, 0.8), (30, 0.3)]
+    print("\nDistance(cm) | Speed | Motor Command")
+    print("-" * 40)
+    for dist, spd in test_cases:
+        cmd = ctrl.compute(dist, spd)
+        action = "STOP" if cmd < -0.3 else "SLOW" if cmd < 0.3 else "MODERATE" if cmd < 0.7 else "FAST"
+        print(f"  {dist:5}cm   |  {spd:.1f}  | {cmd:+.3f}  ({action})")
