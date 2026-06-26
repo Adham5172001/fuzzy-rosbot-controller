@@ -1,0 +1,66 @@
+# Fuzzy ROSbot Controller Parameters
+# Author: Adham Aboulkheir | University of Essex
+
+controller:
+  name: FuzzyNavigationController
+  type: mamdani
+  defuzzification: centroid
+
+inputs:
+  obstacle_distance:
+    unit: cm
+    range: [0, 200]
+    membership_functions:
+      NEAR:
+        type: triangular
+        params: [0, 0, 50]
+      MEDIUM:
+        type: triangular
+        params: [30, 80, 130]
+      FAR:
+        type: triangular
+        params: [100, 200, 200]
+  
+  robot_speed:
+    unit: normalised
+    range: [0, 1]
+    membership_functions:
+      LOW:
+        type: triangular
+        params: [0.0, 0.0, 0.5]
+      HIGH:
+        type: triangular
+        params: [0.3, 1.0, 1.0]
+
+output:
+  motor_command:
+    unit: normalised
+    range: [-1, 1]
+    membership_functions:
+      STOP:
+        type: triangular
+        params: [-1.0, -1.0, -0.2]
+      SLOW:
+        type: triangular
+        params: [-0.3, 0.2, 0.5]
+      MODERATE:
+        type: triangular
+        params: [0.3, 0.6, 0.8]
+      FAST:
+        type: triangular
+        params: [0.6, 1.0, 1.0]
+
+rules:
+  - IF distance IS NEAR AND speed IS HIGH THEN command IS STOP
+  - IF distance IS NEAR AND speed IS LOW THEN command IS SLOW
+  - IF distance IS MEDIUM AND speed IS HIGH THEN command IS SLOW
+  - IF distance IS MEDIUM AND speed IS LOW THEN command IS MODERATE
+  - IF distance IS FAR AND speed IS HIGH THEN command IS FAST
+  - IF distance IS FAR AND speed IS LOW THEN command IS FAST
+
+simulation:
+  max_steps: 1000
+  dt: 0.1
+  arena_size: [500, 500]
+  n_obstacles: 10
+  obstacle_radius: 20
